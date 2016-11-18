@@ -2,6 +2,7 @@
 extern crate alloc;
 extern crate num_cpus;
 extern crate time;
+extern crate crossbeam;
 
 pub mod macros;
 

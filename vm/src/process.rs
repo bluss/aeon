@@ -20,6 +20,15 @@ use queue::Queue;
 
 pub type RcProcess = Arc<Process>;
 
+use std::thread;
+use crossbeam::sync::chase_lev::{deque, Steal};
+pub struct SyncPointer<T> {
+    pub raw: *const T,
+}
+
+unsafe impl<T> Send for SyncPointer<T> {}
+unsafe impl<T> Sync for SyncPointer<T> {}
+
 #[derive(Debug)]
 pub enum ProcessStatus {
     /// The process has been scheduled for execution.
@@ -458,11 +467,47 @@ impl Process {
     /// must be taken to ensure that the raw pointers do not outlive the
     /// underlying object pointers.
     pub fn roots(&self) -> Vec<ObjectPointerPointer> {
+        let thread_count = 3;
+        let mut threads = Vec::with_capacity(thread_count);
         let mut pointers = Vec::new();
+        let (mut worker, stealer) = deque();
 
         for context in self.context().contexts() {
+            worker.push(SyncPointer { raw: context as *const ExecutionContext });
+        }
+
+        for _ in 0..thread_count {
+            let t_stealer = stealer.clone();
+
+            threads.push(thread::spawn(move || {
+                let mut pointers = Vec::new();
+
+                loop {
+                    match t_stealer.steal() {
+                        Steal::Data(ctx) => {
+                            let context = unsafe { &*ctx.raw };
+
+                            context.binding.push_pointers(&mut pointers);
+                            context.register.push_pointers(&mut pointers);
+                        }
+                        Steal::Empty => break,
+                        _ => {}
+                    }
+                }
+
+                pointers
+            }));
+        }
+
+        while let Some(ctx) = worker.try_pop() {
+            let context = unsafe { &*ctx.raw };
+
             context.binding.push_pointers(&mut pointers);
             context.register.push_pointers(&mut pointers);
+        }
+
+        for thread in threads {
+            pointers.append(&mut thread.join().unwrap());
         }
 
         pointers

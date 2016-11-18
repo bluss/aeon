@@ -19,3 +19,4 @@ test = false
 getopts = "0.2"
 num_cpus = "0.2"
 time = "0.1"
+crossbeam = "0.2"
